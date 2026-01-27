@@ -12,9 +12,16 @@
 unsigned long relayOffTime = 0;
 bool relayActive = false;
 
+#define LOCK_PIN 27
+bool isAuthenticated = false;
+
 /* ===== SECURITY ===== */
 static uint32_t counter = 1;
 static const char* SECRET = "PHANTOM_SECRET";
+
+/* ===== RELAY ATTACK DETECTION ===== */
+unsigned long challengeIssuedTime = 0;
+#define MAX_RESPONSE_DELAY 200   // milliseconds 
 
 /* ===== BLE OBJECTS ===== */
 NimBLECharacteristic *challengeChar;
@@ -42,14 +49,16 @@ String hmacSHA256(String msg) {
 /* ===== CHALLENGE CALLBACK ===== */
 class ChallengeCallback : public NimBLECharacteristicCallbacks {
   void onRead(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
-    Serial.println("Challenge READ request received");
-    c->setValue(String(counter));
-  }
+  challengeIssuedTime = millis();   // ⬅ timestamp challenge
+  Serial.println("Challenge READ issued at: " + String(challengeIssuedTime));
+  c->setValue(String(counter));
+}
 
   void onSubscribe(NimBLECharacteristic* c, NimBLEConnInfo& connInfo, uint16_t subValue) override {
-    Serial.println("Client subscribed to CHALLENGE, sending first notification");
-    c->setValue(String(counter));
-    c->notify();
+  challengeIssuedTime = millis();   // ⬅ timestamp challenge
+  Serial.println("Challenge NOTIFY issued at: " + String(challengeIssuedTime));
+  c->setValue(String(counter));
+  c->notify();
   }
 };
 
@@ -57,31 +66,50 @@ class ChallengeCallback : public NimBLECharacteristicCallbacks {
 class ResponseCallback : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic *c, NimBLEConnInfo &connInfo) override {
     String received = c->getValue().c_str();
-    String expected = hmacSHA256(String(counter));
 
-    Serial.println("Received: " + received);
-    Serial.println("Expected: " + expected);
+// ---- COMMAND MODE ----
+  if (isAuthenticated && received == "CLOSE") {
+    Serial.println("CLOSE command received");
+    digitalWrite(LOCK_PIN, LOW);      // lock pulse
+    delay(300);
+    digitalWrite(LOCK_PIN, HIGH);
+    statusChar->setValue("CAR_LOCKED");
+    statusChar->notify();
+  return;
+  }
+
+// ---- AUTH MODE ----
+String expected = hmacSHA256(String(counter));
+
+unsigned long responseTime = millis();
+unsigned long delayMs = responseTime - challengeIssuedTime;
+
+  if (delayMs > MAX_RESPONSE_DELAY) {
+    Serial.println("RELAY ATTACK DETECTED");
+    statusChar->setValue("RELAY_DETECTED");
+    statusChar->notify();
+    return;
+  }
 
     if (received == expected) {
-      counter++;   // advance rolling code
+      counter++;
+      isAuthenticated = true;
       Serial.println("AUTH SUCCESS");
 
-      // Send next challenge to client
-      challengeChar->setValue(String(counter));
-      challengeChar->notify();
-
-      statusChar->setValue("AUTH_OK");
-      digitalWrite(RELAY_PIN, LOW); // Unlock relay
+      digitalWrite(RELAY_PIN, LOW);   // unlock
       relayOffTime = millis() + 2000;
       relayActive = true;
+
+      statusChar->setValue("AUTH_OK");
+      statusChar->notify();
     } else {
       Serial.println("AUTH FAIL");
       statusChar->setValue("AUTH_FAIL");
+      statusChar->notify();
     }
-
-    statusChar->notify();
   }
 };
+
 
 void setup() {
   Serial.begin(115200);
@@ -128,6 +156,10 @@ void setup() {
   NimBLEDevice::startAdvertising();
 
   Serial.println("BLE Rolling Code Ready");
+
+  pinMode(LOCK_PIN, OUTPUT);
+  digitalWrite(LOCK_PIN, HIGH); // default locked
+
 }
 
 void loop() {

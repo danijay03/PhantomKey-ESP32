@@ -31,12 +31,10 @@ https://github.com/danijay03/PhantomKey-Android
 - 12V → 5V buck converter
 - 3.7V Li-ion battery + boost
 - Relay module (opto-isolated)
-- Schottky diodes (1N5819)
-- Bulk capacitor (≥1000µF)
 
 ## Notes
 ⚠ Flash-sensitive pins (CMD, CLK, SD0–SD3) must not be connected.  
 ⚠ Upload firmware via USB only (no relays connected).
 
 ## Status
-MVP firmware complete and stable.
+Prototype firmware complete and stable.
